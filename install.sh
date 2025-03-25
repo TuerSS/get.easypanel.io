@@ -1,51 +1,60 @@
 #!/bin/sh
 set -e
 
-# check if the current user is root
-if [ "$(id -u)" != "0" ]; then
-    echo "Error: you must be root to execute this script" >&2
+if [ "$(id -u)" -ne 0 ]; then
+    echo "🚨 Must be run as root!"
     exit 1
 fi
 
-# check if is Mac OS
 if [ "$(uname)" = "Darwin" ]; then
-    echo "Error: MacOS is not supported" >&2
+    echo "🚫 macOS is not supported!"
     exit 1
 fi
 
-# check if is running inside a container
 if [ -f /.dockerenv ]; then
-    echo "Error: running inside a container is not supported" >&2
+    echo "📦 Running inside a container is not supported!"
     exit 1
 fi
 
-# check if something is running on port 80
-if lsof -i :80 -sTCP:LISTEN >/dev/null; then
-    echo "Error: something is already running on port 80" >&2
-    exit 1
-fi
+for cmd in curl lsof awk docker; do
+    if ! command -v $cmd >/dev/null 2>&1; then
+        apt-get update -qq && apt-get install -y -qq $cmd || yum install -y -q $cmd || echo "⚠️ Failed to install $cmd! Install manually." && exit 1
+    fi
+done
 
-# check if something is running on port 443
-if lsof -i :443 -sTCP:LISTEN >/dev/null; then
-    echo "Error: something is already running on port 443" >&2
-    exit 1
-fi
+for port in 80 443 3000; do
+    if lsof -i :$port -sTCP:LISTEN >/dev/null 2>&1; then
+        echo "🔥 Port $port is already in use! Free it before proceeding."
+        exit 1
+    fi
+done
 
-command_exists() {
-  command -v "$@" > /dev/null 2>&1
-}
-
-if command_exists docker; then
-  echo "Docker already installed"
+if ! command -v docker >/dev/null 2>&1; then
+    echo "🐳 Docker not found, installing..."
+    curl -fsSL https://get.docker.com | sh
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "❌ Docker installation failed! Install manually."
+        exit 1
+    fi
+    echo "✅ Docker installed successfully!"
 else
-  curl -sSL https://get.docker.com | sh
+    echo "✔️ Docker is already installed and running."
 fi
 
-docker swarm leave --force 1> /dev/null 2> /dev/null || true
+echo "🔄 Leaving Docker Swarm (if applicable)..."
+docker swarm leave --force >/dev/null 2>&1 || true
 
+echo "⬇️ Pulling EasyPanel image..."
 docker pull easypanel/easypanel:latest
 
+echo "🚀 Running EasyPanel setup..."
 docker run --rm -i \
   -v /etc/easypanel:/etc/easypanel \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   easypanel/easypanel setup
+
+USER_IP=$(hostname -I | awk '{print $1}')
+
+echo "✅ EasyPanel setup completed!"
+echo "⏳ It may take up to 60 seconds to be fully operational."
+echo "🌐 Visit EasyPanel at: http://$USER_IP:3000/"
